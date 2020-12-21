@@ -1,6 +1,9 @@
 package main
 
 import (
+	"context"
+	"fmt"
+	"github.com/glours/docker-lint/internal"
 	"os"
 
 	"github.com/docker/cli/cli-plugins/manager"
@@ -10,21 +13,53 @@ import (
 )
 
 func main() {
+	ctx, closeFunc := context.WithCancel(context.Background())
+	defer closeFunc()
 	plugin.Run(func(dockerCli command.Cli) *cobra.Command {
-		cmd := &cobra.Command{
-			Use:   "lint",
-			Short: "A basic Hello World plugin",
-			RunE: func(cmd *cobra.Command, args []string) error {
-				delegate("hadolint", os.Args[2:]...)
-				return nil
-			},
-		}
 
-		return cmd
+		return newLintCmd(ctx, dockerCli)
 	},
 		manager.Metadata{
 			SchemaVersion: "0.1.0",
 			Vendor:        "Docker Inc.",
-			Version:       "testing",
+			Version:       internal.Version,
 		})
+}
+
+type options struct {
+	showVersion bool
+}
+
+func newLintCmd(ctx context.Context, cli command.Cli) *cobra.Command {
+	var flags options
+	cmd := &cobra.Command{
+		Short:       "Docker Lint",
+		Long:        `A tool to lint your Dockerfiles and Compose files`,
+		Use:         "lint [OPTIONS] DOCKERFILE",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if flags.showVersion {
+				return runVersion()
+			}
+			if len(args) > 0 {
+				delegate("hadolint", os.Args[2:]...)
+			} else {
+				if err := cmd.Usage(); err !=nil {
+					return err
+				}
+				return fmt.Errorf(`"docker lint" requires at least 1 argument`)
+			}
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&flags.showVersion, "version", false, "Display version of the lint plugin")
+	return cmd
+}
+
+func runVersion() error {
+	version, err := internal.FullVersion()
+	if err != nil {
+		return err
+	}
+	fmt.Println(version)
+	return nil
 }
