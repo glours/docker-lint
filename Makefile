@@ -14,20 +14,13 @@
 include vars.mk
 
 BUILD_ARGS := --build-arg GO_VERSION=$(GO_VERSION)\
-	--build-arg CLI_VERSION=$(CLI_VERSION)\
 	--build-arg ALPINE_VERSION=$(ALPINE_VERSION)\
 	--build-arg GOLANGCI_LINT_VERSION=$(GOLANGCI_LINT_VERSION) \
 	--build-arg TAG_NAME=$(GIT_TAG_NAME) \
 	--build-arg GOTESTSUM_VERSION=$(GOTESTSUM_VERSION)
 
-E2E_ENV := --env E2E_TEST_AUTH_TOKEN \
-           --env E2E_HUB_URL \
-           --env E2E_HUB_USERNAME \
-           --env E2E_HUB_TOKEN \
-           --env E2E_TEST_NAME
-
 .PHONY: all
-all: lint validate build test
+all: lint build test
 
 .PHONY: build
 build: ## Build docker-lint in a container
@@ -68,19 +61,6 @@ test-unit: test-unit-build ## Run unit tests
 .PHONY: lint
 lint: ## Run the go linter
 	@docker build . --target lint
-
-.PHONY: validate-headers
-validate-headers: ## Validate files license header
-	docker run --rm -v $(CURDIR):/work -w /work \
-	 golang:${GO_VERSION} \
-	 bash -c 'go get -u github.com/kunalkushwaha/ltag && ./scripts/validate/fileheader'
-
-.PHONY: validate-go-mod
-validate-go-mod: ## Validate go.mod and go.sum are up-to-date
-	@docker build . --target check-go-mod
-
-.PHONY: validate
-validate: validate-go-mod validate-headers ## Validate sources
 
 .PHONY: help
 help: ## Show help
