@@ -29,7 +29,7 @@ WORKDIR /go/src/github.com/glours/docker-lint
 
 # cache go vendoring
 COPY go.* ./
-RUN --mount=type=cache,target=/root/.cache/go-build \
+RUN --mount=type=cache,target=/go/pkg/mod/go-build \
     go mod download
 COPY . .
 
@@ -44,8 +44,8 @@ FROM golangci/golangci-lint:${GOLANGCI_LINT_VERSION} AS lint-base
 FROM builder AS lint
 ENV CGO_ENABLED=0
 COPY --from=lint-base /usr/bin/golangci-lint /usr/bin/golangci-lint
-RUN --mount=type=cache,target=/root/.cache/go-build \
-    --mount=type=cache,target=/root/.cache/golangci-lint \
+RUN --mount=type=cache,target=/go/pkg/mod/go-build \
+    --mount=type=cache,target=/go/pkg/mod/golangci-lint \
     make -f builder.Makefile lint
 
 ####
@@ -54,7 +54,7 @@ RUN --mount=type=cache,target=/root/.cache/go-build \
 FROM builder AS build
 ARG TARGETOS
 ARG TARGETARCH
-RUN --mount=type=cache,target=/root/.cache/go-build \
+RUN --mount=type=cache,target=/go/pkg/mod/go-build \
     GOOS=${TARGETOS} \
     GOARCH=${TARGETARCH} \
     make -f builder.Makefile build
@@ -71,7 +71,7 @@ COPY --from=build /go/src/github.com/glours/docker-lint/bin/* /
 FROM builder AS cross-build
 ARG TAG_NAME
 ENV TAG_NAME=$TAG_NAME
-RUN --mount=type=cache,target=/root/.cache/go-build \
+RUN --mount=type=cache,target=/go/pkg/mod/go-build \
     make -f builder.Makefile cross
 
 ####

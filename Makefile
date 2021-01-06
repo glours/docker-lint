@@ -20,7 +20,7 @@ BUILD_ARGS := --build-arg GO_VERSION=$(GO_VERSION)\
 	--build-arg GOTESTSUM_VERSION=$(GOTESTSUM_VERSION)
 
 .PHONY: all
-all: lint build test
+all: lint build test-unit
 
 .PHONY: build
 build: ## Build docker-lint in a container
@@ -49,14 +49,14 @@ e2e-build:
 
 .PHONY: e2e
 e2e: e2e-build ## Run the end-to-end tests
-	@docker run $(E2E_ENV) --rm -v /var/run/docker.sock:/var/run/docker.sock -v $(shell go env GOCACHE):/root/.cache/go-build docker-lint:e2e
+	@docker run $(E2E_ENV) --rm -v /var/run/docker.sock:/var/run/docker.sock -v $(shell go env GOCACHE):/go/pkg/mod/go-build docker-lint:e2e
 
 test-unit-build:
 	docker build $(BUILD_ARGS) . --target test-unit -t docker-lint:test-unit
 
 .PHONY: test-unit
 test-unit: test-unit-build ## Run unit tests
-	docker run --rm -v $(shell go env GOCACHE):/root/.cache/go-build docker-lint:test-unit
+	docker run --rm -v $(shell go env GOCACHE):/go/pkg/mod/go-build docker-lint:test-unit
 
 .PHONY: lint
 lint: ## Run the go linter
