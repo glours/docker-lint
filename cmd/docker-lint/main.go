@@ -3,13 +3,12 @@ package main
 import (
 	"context"
 	"fmt"
-	"github.com/glours/docker-lint/internal"
-	"os"
-
 	"github.com/docker/cli/cli-plugins/manager"
 	"github.com/docker/cli/cli-plugins/plugin"
 	"github.com/docker/cli/cli/command"
+	"github.com/glours/docker-lint/internal"
 	"github.com/spf13/cobra"
+	"os"
 )
 
 func main() {
@@ -41,7 +40,7 @@ func newLintCmd(ctx context.Context, cli command.Cli) *cobra.Command {
 				return runVersion()
 			}
 			if len(args) > 0 {
-				delegate("hadolint", os.Args[2:]...)
+				delegate(ctx, cli, os.Args[2:]...)
 			} else {
 				if err := cmd.Usage(); err !=nil {
 					return err
