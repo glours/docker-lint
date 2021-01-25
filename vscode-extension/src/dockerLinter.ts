@@ -56,6 +56,9 @@ export default class ShellCheckProvider implements vscode.CodeActionProvider {
                         this.diagnosticCollection.set(dockerfile.uri, parseDiagnostics(output.join('').trim()));
                         resolve();
                     });
+                    childProcess.stderr.on('data', (data: Buffer) => {
+                        output.push(data.toString());
+                    })
             } else {
                 resolve();
             }

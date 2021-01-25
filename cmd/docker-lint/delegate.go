@@ -1,45 +1,128 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"fmt"
+	"github.com/docker/cli/cli/command"
+	"github.com/docker/docker/api/types"
+	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/strslice"
+	"github.com/docker/docker/pkg/jsonmessage"
+	"github.com/docker/docker/pkg/stdcopy"
 	"os"
-	"os/exec"
-	"os/signal"
+	"path/filepath"
 )
 
-func delegate(execBinary string, args ...string) {
-	cmd := exec.Command(execBinary, args...)
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	cmd.Env = os.Environ()
+var (
+	ImageDigest = "sha256:2021ffa2e860757aa28367dfe6b77cda95dfa3276781b3932130ef80a46612c5"
+	image       = fmt.Sprintf("hadolint/hadolint@%s", ImageDigest)
+)
 
-	signals := make(chan os.Signal, 1)
-	childExit := make(chan bool)
-	signal.Notify(signals) // catch all signals
-	go func() {
-		for {
-			select {
-			case sig := <-signals:
-				if cmd.Process == nil {
-					continue // can happen if receiving signal before the process is actually started
-				}
-				// nolint errcheck
-				cmd.Process.Signal(sig)
-			case <-childExit:
-				return
-			}
-		}
-	}()
+type removeContainerFunc func() error
 
-	err := cmd.Run()
-	childExit <- true
+func delegate(ctx context.Context, cli command.Cli, args ...string) {
+	err := pullImage(ctx, cli)
 	if err != nil {
-		if exiterr, ok := err.(*exec.ExitError); ok {
-			os.Exit(exiterr.ExitCode())
-		}
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+
+	containerID, removeContainer, err := createContainer(ctx, cli, args...)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	//nolint: errcheck
+	defer removeContainer()
+
+	streamFunc, err := startContainer(ctx, cli, containerID)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	defer streamFunc()
+
+	statusc, errc := cli.Client().ContainerWait(ctx, containerID, container.WaitConditionNotRunning)
+	select {
+	case err := <-errc:
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+	case s := <-statusc:
+		switch s.StatusCode {
+		case 0:
+		default:
+			os.Exit(1)
+		}
+	}
+
 	os.Exit(0)
+}
+
+func removeContainer(ctx context.Context, cli command.Cli, containerID string) removeContainerFunc {
+	return func() error {
+		return cli.Client().ContainerRemove(ctx, containerID, types.ContainerRemoveOptions{})
+	}
+}
+
+func pullImage(ctx context.Context, cli command.Cli) error {
+	options := types.ImagePullOptions{}
+	_, _, err := cli.Client().ImageInspectWithRaw(ctx, image)
+	if err != nil {
+		responseBody, err := cli.Client().ImagePull(ctx, image, options)
+		if err != nil {
+			return err
+		}
+		//nolint: errcheck
+		defer responseBody.Close()
+		return jsonmessage.DisplayJSONMessagesStream(responseBody, bytes.NewBuffer(nil), os.Stdout.Fd(), false, nil)
+
+	}
+	return nil
+}
+
+func createContainer(ctx context.Context, cli command.Cli, args ...string) (string, removeContainerFunc, error) {
+	cmdArgs := append(strslice.StrSlice{"hadolint"}, args[0:len(args)-1]...)
+	cmdArgs = append(cmdArgs, "/Dockerfile")
+	config := container.Config{
+		AttachStdout:    true,
+		AttachStderr:    true,
+		Image:           image,
+		Cmd:             cmdArgs,
+		NetworkDisabled: true,
+	}
+	dockerfilePath, err := filepath.Abs(args[len(args)-1])
+	if err != nil {
+		return "", nil, err
+	}
+	hostConfig := container.HostConfig{
+		Binds: []string{fmt.Sprintf("%s:/Dockerfile", dockerfilePath)},
+	}
+
+	result, err := cli.Client().ContainerCreate(ctx, &config, &hostConfig, nil, "")
+	if err != nil {
+		return "", nil, err
+	}
+	removeContainerFunc := removeContainer(ctx, cli, result.ID)
+	return result.ID, removeContainerFunc, nil
+}
+
+func startContainer(ctx context.Context, cli command.Cli, containerID string) (func(), error) {
+	resp, err := cli.Client().ContainerAttach(ctx, containerID, types.ContainerAttachOptions{
+		Stream: true,
+		Stdout: true,
+		Stderr: true,
+	})
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	go func() {
+		for {
+			_, err = stdcopy.StdCopy(os.Stdout, os.Stderr, resp.Reader)
+		}
+	}()
+	return resp.Close, cli.Client().ContainerStart(ctx, containerID, types.ContainerStartOptions{})
 }
