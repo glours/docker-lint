@@ -19,24 +19,71 @@ var (
 	image       = fmt.Sprintf("hadolint/hadolint@%s", ImageDigest)
 )
 
+type removeContainerFunc func() error
+
 func delegate(ctx context.Context, cli command.Cli, args ...string) {
+	err := pullImage(ctx, cli)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+
+	containerID, removeContainer, err := createContainer(ctx, cli, args...)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	//nolint: errcheck
+	defer removeContainer()
+
+	streamFunc, err := startContainer(ctx, cli, containerID)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	defer streamFunc()
+
+	statusc, errc := cli.Client().ContainerWait(ctx, containerID, container.WaitConditionNotRunning)
+	select {
+	case err := <-errc:
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+	case s := <-statusc:
+		switch s.StatusCode {
+		case 0:
+		default:
+			os.Exit(1)
+		}
+	}
+
+	os.Exit(0)
+}
+
+func removeContainer(ctx context.Context, cli command.Cli, containerID string) removeContainerFunc {
+	return func() error {
+		return cli.Client().ContainerRemove(ctx, containerID, types.ContainerRemoveOptions{})
+	}
+}
+
+func pullImage(ctx context.Context, cli command.Cli) error {
 	options := types.ImagePullOptions{}
 	_, _, err := cli.Client().ImageInspectWithRaw(ctx, image)
 	if err != nil {
 		responseBody, err := cli.Client().ImagePull(ctx, image, options)
 		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
+			return err
 		}
 		//nolint: errcheck
 		defer responseBody.Close()
-		err = jsonmessage.DisplayJSONMessagesStream(responseBody, bytes.NewBuffer(nil), os.Stdout.Fd(), false, nil)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
-		}
-	}
+		return jsonmessage.DisplayJSONMessagesStream(responseBody, bytes.NewBuffer(nil), os.Stdout.Fd(), false, nil)
 
+	}
+	return nil
+}
+
+func createContainer(ctx context.Context, cli command.Cli, args ...string) (string, removeContainerFunc, error) {
 	cmdArgs := append(strslice.StrSlice{"hadolint"}, args...)
 
 	config := container.Config{
@@ -48,8 +95,7 @@ func delegate(ctx context.Context, cli command.Cli, args ...string) {
 	}
 	dockerfilePath, err := filepath.Abs(args[len(args)-1])
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+		return "", nil, err
 	}
 	hostConfig := container.HostConfig{
 		Binds: []string{fmt.Sprintf("%s:/Dockerfile", dockerfilePath)},
@@ -57,12 +103,13 @@ func delegate(ctx context.Context, cli command.Cli, args ...string) {
 
 	result, err := cli.Client().ContainerCreate(ctx, &config, &hostConfig, nil, "")
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+		return "", nil, err
 	}
-	containerID := result.ID
-	defer cli.Client().ContainerRemove(ctx, containerID, types.ContainerRemoveOptions{})
+	removeContainerFunc := removeContainer(ctx, cli, result.ID)
+	return result.ID, removeContainerFunc, nil
+}
 
+func startContainer(ctx context.Context, cli command.Cli, containerID string) (func(), error) {
 	resp, err := cli.Client().ContainerAttach(ctx, containerID, types.ContainerAttachOptions{
 		Stream: true,
 		Stdout: true,
@@ -77,27 +124,5 @@ func delegate(ctx context.Context, cli command.Cli, args ...string) {
 			_, err = stdcopy.StdCopy(os.Stdout, os.Stderr, resp.Reader)
 		}
 	}()
-	cli.Client().ContainerStart(ctx, containerID, types.ContainerStartOptions{})
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
-	}
-	defer resp.Close()
-	statusc, errc := cli.Client().ContainerWait(ctx, containerID, container.WaitConditionNotRunning)
-	select {
-	case err := <-errc:
-		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
-		}
-	case s := <-statusc:
-		switch s.StatusCode {
-		case 0:
-		default:
-			fmt.Fprintln(os.Stderr, "here?")
-			os.Exit(1)
-		}
-	}
-
-	os.Exit(0)
+	return resp.Close, cli.Client().ContainerStart(ctx, containerID, types.ContainerStartOptions{})
 }
