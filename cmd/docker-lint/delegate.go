@@ -84,8 +84,8 @@ func pullImage(ctx context.Context, cli command.Cli) error {
 }
 
 func createContainer(ctx context.Context, cli command.Cli, args ...string) (string, removeContainerFunc, error) {
-	cmdArgs := append(strslice.StrSlice{"hadolint"}, args...)
-
+	cmdArgs := append(strslice.StrSlice{"hadolint"}, args[0:len(args)-1]...)
+	cmdArgs = append(cmdArgs, "/Dockerfile")
 	config := container.Config{
 		AttachStdout:    true,
 		AttachStderr:    true,
